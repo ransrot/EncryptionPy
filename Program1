@@ -1,0 +1,289 @@
+import argparse 
+import os
+import sys
+from cryptography.fernet import Fernet 
+import smtplib
+import getpass
+
+class Colors:
+    def __init__(self):
+        pass
+
+    def red_color(self, color):
+        return "\033[1;31;10m " + color
+
+    def bright_blue(self, color):
+        return "\033[1;34;10m " + color
+
+    def white_color(self, color):
+        return "\033[1;37;10m " + color
+
+    def green_color(self, color):
+        return "\033[1;32;10m " + color
+
+
+class Parser:
+	def __init__(self):
+		self.args = argparse.ArgumentParser(description="Encryption, Decryption program.")
+		self.args.add_argument("--encrypt", type=self.validate_file, help="File/Files to encrypt")
+		self.args.add_argument("--decrypt", type=self.validate_file, help="File/Files to decrypt")
+		self.args.add_argument("--subdir", help="Go through the directory of the file", action='store_true')
+		# allow the user to select a directory, and choose which file, or vice versa 
+
+		self.args_parsed = self.args.parse_args()
+
+	def validate_file(self, file):
+		if not os.path.exists(file):
+			msg = "[-] File or Directory not found"
+			raise argparse.ArgumentError(msg)
+		return file
+
+	def get_encrypt_file(self):
+		return self.args_parsed.encrypt
+
+	def get_decrypt_file(self):
+		return self.args_parsed.decrypt
+
+
+class Email(Parser):
+	def __init__(self, message):
+		super().__init__()
+		self.message = message
+
+		self.user_input()
+
+	def user_input(self):
+		print("\n[***] Make sure to have a GMAIL account\n")
+		
+		email = input("Enter your email: ")
+		password = getpass.getpass("Enter your password: ")
+
+		self.email_login(email, password)
+
+	def email_login(self, email, password):
+		message = self.message
+		server = smtplib.SMTP("smtp.gmail.com", 587)
+		server.starttls()
+
+		try:
+			server.login(email, password)
+			print("\n[+] Login success\n")
+		except smtplib.SMTPAuthenticationError:
+			print("\n[-] Invalid Email address or Password.")
+			exit()
+
+		server.sendmail(email, email, message)
+		print("\n[+] Encryption key successfuly sent to --> " + str(email))
+
+
+class Encryption(Parser, Colors):
+	def __init__(self):
+		super().__init__()
+		print(self.bright_blue("\n[+] Encryption\n"))
+
+		self.file = self.get_encrypt_file()  # the file the user wants to encrypt
+		self.private_key = Fernet.generate_key()  # private key
+		Email(self.private_key)  # make the user input their email address
+		print("\n[+] Encrypting file/files now\n")
+
+		self.start_encryption()  # start the encryption
+
+	def start_encryption(self):
+		arguments = sys.argv[1:]
+		if "--subdir" in arguments:
+			self.subdir_main()
+			exit()
+		if os.path.isdir(self.file):
+			self.directory_encryption()
+		if os.path.isfile(self.file):
+			self.single_file_encryption()
+
+	def get_last_portion_file(self, file):
+		return file.split("/")[-1]
+
+	def check_if_file_empty(self, file):
+		return os.stat(file).st_size == 0
+
+	def directory_encryption(self):
+		fernet = Fernet(self.private_key)
+		os.chdir(self.file)  # go into the directory of the dir chosen
+		count = 0
+
+		for files in os.listdir(self.file):
+			if os.path.isdir(os.path.join(self.file, files)):
+				print(self.red_color("\n[-] SubDirectory found --> {}".format(files)))
+				continue
+			with open(files, 'rb') as file:
+				data = file.read()
+				if len(data) == 0:
+					print(self.red_color("\n[-] Could not encrypt --> {} Insufficent size.").format(files))
+					continue
+				file.close()
+				encrypted = fernet.encrypt(data)
+
+				with open(files, 'wb') as file:
+					file.write(encrypted)
+					file.close()
+				count += 1 
+		print(self.bright_blue("\n[+] Finished encrypting. You encrypted -- > {} files.".format(str(count))))
+
+	def single_file_encryption(self):
+		empty = self.check_if_file_empty(self.file)
+
+		if empty is False:
+			with open(self.file, "rb") as f:
+				data = f.read()
+				f.close()
+				os.remove(self.file)
+
+			fernet = Fernet(self.private_key)
+			encrypted = fernet.encrypt(data)
+
+			public_key = encrypted
+			new_file = "encrypted." + str(self.get_last_portion_file(self.file))
+
+			with open(new_file, "wb") as file:
+				file.write(public_key)
+				file.close()
+		else:
+			print(self.red_color("\n[-] File is empty. Exiting."))
+			print("[-] Nothing Encrypted")
+			exit()
+
+	def fernet_encryption(self, data):
+		try:
+			fernet = Fernet(self.private_key)
+			return fernet.encrypt(data)
+		except ValueError:
+			pass
+
+	def subdir_main(self):  # IF THE USER WANTS THE SUBDIRECTORYS CALL THIS FUNCTION
+		count = 0
+		user_file = self.file
+
+		for subdir, dirs, files in os.walk(user_file):
+			for file in files:
+				combine_dir_file = subdir + "/" + file
+
+				with open(combine_dir_file, "rb") as f:
+					os.chdir(subdir)
+					data = f.read()
+					os.remove(file)
+					f.close()
+
+				encrypted = self.fernet_encryption(data)
+				with open(file, "wb") as f:
+					f.write(encrypted)
+					f.close()
+				count += 1
+		print("\n[+] You have encrypted --> {} files".format(count))
+
+
+class Decryption(Parser, Colors):
+	def __init__(self):
+		super().__init__()
+		print(self.green_color("\n[+] Decryption\n"))
+
+		self.user_file = self.get_decrypt_file()  # file to decrypt
+		self.private_key = self.user_input()
+		self.start_decryption()
+
+	def user_input(self):
+		passcode = getpass.getpass("Enter the private key: ")
+		return passcode.encode()
+
+	def start_decryption(self):
+		arguments = sys.argv[1:]
+		if "--subdir" in arguments:
+			self.subdir_decryption()
+			exit()
+		if os.path.isdir(self.file):
+			self.directory_decryption()
+		if os.path.isfile(self.file):
+			self.decrypt_file()
+
+	def directory_decryption(self):
+		fernet = Fernet(self.private_key)
+		os.chdir(self.file)
+		count = 0
+
+		for files in os.listdir(self.file):
+			if os.path.isdir(os.path.join(self.file, files)):
+				print(self.red_color("\n[-] Skipping SubDirectory --> {}".format(files)))
+				continue
+			with open(files, 'rb') as file:
+				data = file.read()
+				file.close()
+
+				decrypted = fernet.decrypt(data)
+				decrypted = decrypted.decode()
+				with open(files, 'w') as file:
+					file.write(decrypted)
+					file.close()
+			count += 1
+		print("\n[+] You have decrypted {} files".format(str(count)))
+
+	def decrypt_file(self):
+		with open(self.file, "rb") as file:
+			data = file.read()
+			if len(data) == 0:
+				print(self.red_color("\n[-] Exiting. Insufficent length"))
+				exit()
+			os.remove(self.file)
+			file.close()
+
+		decrypt = self.fernet(data)
+		decrypt = decrypt.decode()
+
+		decrypted_file = "decrypted." + str(Encryption.get_last_portion_file(self, self.file))
+		
+		with open(decrypted_file, "w") as file:
+			file.write(decrypt)
+			file.close()
+
+	def fernet_decryption(self, data):
+		try:
+			fernet = Fernet(self.private_key)
+			return fernet.decrypt(data)
+		except ValueError:
+			print("\n[-] Invalid key.")
+			exit()
+
+	def subdir_decryption(self):  # decrypt if the user elects to decrypt everything in his directory
+		count = 0
+
+		for subdir, dirs, files, in os.walk(self.user_file):
+			for file in files:
+				if len(file) == 0:
+					print("Skipping --> {}".format(file))
+					continue
+				combine_dir_file = subdir + "/" + file
+
+				with open(combine_dir_file, "rb") as f:
+					os.chdir(subdir)
+					data = f.read()
+					f.close()
+
+				decryption = self.fernet_decryption(data)
+				decryption = decryption.decode()
+				count += 1
+
+				with open(file, 'w') as f:
+					f.write(decryption)
+					f.close()
+		print("\n[+] Decrypted --> {} files.".format(str(count)))
+
+if __name__ == '__main__':
+	try:
+		arguments = sys.argv[1:]
+
+		if "--encrypt" in arguments:
+			Encryption()
+		elif "--decrypt" in arguments:
+			Decryption()
+	except IndexError:
+		print(Colors().red_color("\n[-] Invalid argument. Please try again."))
+	except KeyboardInterrupt:
+		print(Colors().red_color("\n[-] Exiting."))
+	except Exception:
+		pass
